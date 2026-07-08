@@ -6,6 +6,7 @@ import com.messenger.api.messaging.dto.ReadReceiptRequest;
 import com.messenger.api.messaging.dto.ReadReceiptResponse;
 import com.messenger.api.messaging.dto.SendMessageRequest;
 import com.messenger.api.messaging.dto.TypingEvent;
+import com.messenger.api.messaging.service.ConversationService;
 import com.messenger.api.messaging.service.CurrentUserService;
 import com.messenger.api.messaging.service.MessageService;
 import com.messenger.api.messaging.service.WebSocketMessagingService;
@@ -16,21 +17,25 @@ import org.slf4j.LoggerFactory;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.stereotype.Controller;
+import org.springframework.util.StringUtils;
 
 @Controller
 public class MessagingSocketController {
     private static final Logger log = LoggerFactory.getLogger(MessagingSocketController.class);
 
     private final CurrentUserService currentUserService;
+    private final ConversationService conversationService;
     private final MessageService messageService;
     private final WebSocketMessagingService socketMessagingService;
 
     public MessagingSocketController(
         CurrentUserService currentUserService,
+        ConversationService conversationService,
         MessageService messageService,
         WebSocketMessagingService socketMessagingService
     ) {
         this.currentUserService = currentUserService;
+        this.conversationService = conversationService;
         this.messageService = messageService;
         this.socketMessagingService = socketMessagingService;
     }
@@ -47,13 +52,22 @@ public class MessagingSocketController {
     @MessageMapping("/typing")
     public void typing(TypingEvent event, Principal principal) {
         AppUser user = currentUserService.getCurrentUser(principal);
-        log.info("STOMP typing user={} conversation={} isTyping={}", user.getId(), event.conversationId(), event.isTyping());
+        String conversationId = event.conversationId();
+        if (!StringUtils.hasText(conversationId)) {
+            throw new IllegalArgumentException("Conversation id is required.");
+        }
+
+        log.info("STOMP typing received user={} conversation={} isTyping={}", user.getId(), conversationId, event.isTyping());
+        conversationService.requireConversationForUser(conversationId, user);
+        log.debug("STOMP typing membership validated user={} conversation={}", user.getId(), conversationId);
+
         socketMessagingService.publishTyping(new TypingEvent(
-            event.conversationId(),
+            conversationId,
             user.getId(),
             event.isTyping(),
             Instant.now()
         ));
+        log.debug("STOMP typing forwarded user={} conversation={} isTyping={}", user.getId(), conversationId, event.isTyping());
     }
 
     @MessageMapping("/messages.read")
